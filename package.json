@@ -1,0 +1,23 @@
+{
+  "name": "vault",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "deploy-sepolia": "npx hardhat run deployments/deploy_vault.js --network sepolia",
+    "compile": "npx hardhat compile"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@nomiclabs/hardhat-etherscan": "^3.1.8",
+    "hardhat": "^2.22.1"
+  },
+  "dependencies": {
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@openzeppelin/contracts": "^5.0.2",
+    "@uniswap/v2-core": "^1.0.1",
+    "dotenv": "^16.4.5"
+  }
+}
