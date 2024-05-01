@@ -9,7 +9,7 @@
     "compile": "npx hardhat compile"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@nomiclabs/hardhat-etherscan": "^3.1.8",
     "hardhat": "^2.22.1"
