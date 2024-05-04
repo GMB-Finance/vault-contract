@@ -1,12 +1,12 @@
 
 # Vault Contract
 
-A secure and dynamic smart contract for token locking on the Ethereum blockchain, inspired by Curve's veToken model. This project utilizes OpenZeppelin's contracts and incorporates a unique mechanism where the voting power declines linearly over time, enhancing governance fairness and engagement. Additionally, it allows querying the voting power at any specific block, providing flexibility and transparency for token holders.
+A robust and dynamic smart contract for token locking on the Ethereum blockchain, influenced by Curve's veToken model but with significant modifications to enhance user incentives and engagement. This project leverages OpenZeppelin's contracts to ensure security and adds a distinctive mechanism where the voting power increases over time rather than declining. It also introduces the ability for users to re-lock their tokens, further increasing their voting power the longer they commit their holdings.
 
 ## Features
 
-- **Token Locking with Declining Voting Power**: Implements a voting power mechanism that decreases linearly over the lock period, inspired by Curve’s veToken model. Users can query their voting power at any specific block, ensuring transparency and adaptability in voting scenarios.
-- **Fee Collection and Reward Distribution**: Securely collects fees on deposits and distributes rewards based on token holding durations.
+- **Token Locking with Increasing Voting Power**: Implements a novel voting power mechanism that increases over the lock period, encouraging longer-term holding and enhancing governance participation. Users can also extend their lock duration through re-locking, boosting their influence within the ecosystem.
+- **Fee Collection and Reward Distribution**: Efficiently collects fees on deposits and distributes rewards, aligning with the duration tokens are held, thus promoting longer lock-ins.
 - **Emergency Unlock Feature**: Allows for an emergency withdrawal of tokens under specific conditions, ensuring user funds' safety.
 - **Enhanced Security and Role-Based Functions**: Utilizes OpenZeppelin libraries for security while providing role-based functions for administrative control.
 
