@@ -3,7 +3,7 @@ pragma solidity 0.8.20;
 
 /**
  * @title  Vault
- * @author Rekt/KurgerBing69/Frank
+ * @author Rekt/KurgerBing69/FrankFourier
  */
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -34,16 +34,10 @@ contract Vault is Ownable, ReentrancyGuard {
     uint public usersCounter;
     /// @notice Locked tokens
     uint public totalLockedTokens;
-    /// @notice Total Available Rewards
-    uint public totalAvailableRewards;
     /// @notice Active users array
     address[MAX_ACTIVE_USERS] public activeUsers;
-
-    /// @notice Mapping of user addresses to their respective lock information
-    mapping(address => UserLock) public userLockInfo;
-    /// @notice Mapping with authorized users
-    mapping(address => bool) public authorized;
-    /// @notice Erc20 token to lock in the Vault
+    /// @notice Array to store reward token addresses
+    address[] public rewardTokenAddresses;
 
     /// @notice Stores user token lock details
     struct UserLock {
@@ -52,6 +46,21 @@ contract Vault is Ownable, ReentrancyGuard {
         uint256 lockEndBlock; ///< End time when tokens will be unlocked
     }
 
+    /// @notice Struct to store reward token details
+    struct RewardToken {
+        address tokenAddress;
+        uint256 availableRewards;
+        uint256 minRewardThreshold;
+    }
+
+    /// @notice Mapping of user addresses to their respective lock information
+    mapping(address => UserLock) public userLockInfo;
+    /// @notice Mapping with authorized users
+    mapping(address => bool) public authorized;
+    /// @notice Mapping to store reward token details
+    mapping(address => RewardToken) public rewardTokens;
+
+    /// @notice Erc20 token to lock in the Vault
     IERC20 public immutable vaultToken;
 
     ////////////////// EVENTS //////////////////
@@ -59,14 +68,25 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @notice Event emitted when user deposit fund to our vault
     event TokensLocked(address indexed user, uint amount, uint lockEndBlock);
 
+    /// @notice Event emitted when user extends lock period or add amount
+    event LockExtended(
+        address indexed user,
+        uint256 amountAdded,
+        uint256 newLockEndBlock
+    );
+
     /// @notice Event emitted when user claim their locked tokens
     event TokensUnlocked(address indexed user, uint amount);
 
     /// @notice Event emitted when admin distribute rewards to user
-    event RewardsDistributed(address indexed user, uint amount);
+    event RewardsDistributed(
+        address indexed user,
+        address indexed token,
+        uint amount
+    );
 
     /// @notice Event emitted when rewards are deposited to the vault contract
-    event RewardsFunded(uint amount);
+    event RewardsFunded(address indexed token, uint amount);
 
     /// @notice Event emitted emergency unlock is triggered
     event EmergencyUnlockTriggered(address indexed user, uint amount);
@@ -95,6 +115,12 @@ contract Vault is Ownable, ReentrancyGuard {
         vaultToken = IERC20(_vaultToken); // Associate ERC20 token
         authorized[_owner] = true; // Grant authorization to owner
         feeBeneficiary = _feeBeneficiary; // Set fee beneficiary
+        rewardTokens[_vaultToken] = RewardToken({
+            tokenAddress: _vaultToken,
+            availableRewards: 0,
+            minRewardThreshold: 1 * 10 ** 18
+        }); // Add vault token as the first reward token
+        rewardTokenAddresses.push(_vaultToken);
     }
 
     ////////////////// SETTER //////////////////
@@ -106,8 +132,6 @@ contract Vault is Ownable, ReentrancyGuard {
         feeBeneficiary = _newBeneficiary;
     }
 
-    // Add function to add authorized users
-
     /// @notice Add authorized user
     /// @param _user Address of the user
     function setAuthorizedUser(address _user, bool _state) external onlyOwner {
@@ -115,10 +139,31 @@ contract Vault is Ownable, ReentrancyGuard {
         authorized[_user] = _state;
     }
 
+    /// @notice Function to add a reward token
+    /// @param _tokenAddress Address of the reward token
+    /// @param _minRewardThreshold Distribution rate of the reward token
+    function setRewardToken(
+        address _tokenAddress,
+        uint256 _minRewardThreshold
+    ) external onlyOwner {
+        require(_tokenAddress != address(0), "Invalid token address");
+        require(
+            rewardTokens[_tokenAddress].tokenAddress == address(0),
+            "Token already added"
+        );
+
+        rewardTokens[_tokenAddress] = RewardToken({
+            tokenAddress: _tokenAddress,
+            availableRewards: 0,
+            minRewardThreshold: _minRewardThreshold
+        });
+        rewardTokenAddresses.push(_tokenAddress);
+    }
+
     ////////////////// READ //////////////////
 
     function name() external view virtual returns (string memory) {
-        return "VeToken";
+        return "VeGMBase";
     }
 
     function decimals() external view virtual returns (uint8) {
@@ -126,11 +171,11 @@ contract Vault is Ownable, ReentrancyGuard {
     }
 
     function symbol() external view virtual returns (string memory) {
-        return "VETKN";
+        return "VEGMB";
     }
 
     /**
-     * @dev Get adjusted total Supply
+     * @notice Get adjusted total Supply
      */
     function totalSupply() public view virtual returns (uint256) {
         return _getTotalAdjustedLockedTokens();
@@ -176,20 +221,15 @@ contract Vault is Ownable, ReentrancyGuard {
     ) internal view returns (uint256) {
         UserLock memory lock = userLockInfo[user];
         if (
-            blockNumber >= lock.lockEndBlock ||
+            blockNumber > lock.lockEndBlock ||
             lock.lockedTokens == 0 ||
-            blockNumber < lock.lockStartBlock
+            blockNumber <= lock.lockStartBlock
         ) {
             return 0;
         } else {
-            if (blockNumber == lock.lockStartBlock) {
-                return lock.lockedTokens;
-            } else {
-                uint256 elapsed = blockNumber - lock.lockStartBlock;
-                uint256 totalDuration = lock.lockEndBlock - lock.lockStartBlock;
-                uint256 remainingDuration = totalDuration - elapsed;
-                return (lock.lockedTokens * remainingDuration) / totalDuration;
-            }
+            uint256 elapsed = blockNumber - lock.lockStartBlock;
+            uint256 totalDuration = lock.lockEndBlock - lock.lockStartBlock;
+            return (lock.lockedTokens * elapsed) / totalDuration;
         }
     }
 
@@ -203,26 +243,22 @@ contract Vault is Ownable, ReentrancyGuard {
         returns (uint256 totalAdjustedLockedTokens)
     {
         uint256 currentBlock = block.number;
-        totalAdjustedLockedTokens = 0; // Initialize the total
+        totalAdjustedLockedTokens = 0;
 
         for (uint i = 0; i < usersCounter; i++) {
-            UserLock memory lock = userLockInfo[activeUsers[i]];
-            if (
-                currentBlock > lock.lockStartBlock &&
-                currentBlock < lock.lockEndBlock
-            ) {
-                uint256 elapsed = currentBlock - lock.lockStartBlock;
-                uint256 totalDuration = lock.lockEndBlock - lock.lockStartBlock;
-                uint256 remainingDuration = totalDuration - elapsed;
-                totalAdjustedLockedTokens +=
-                    (lock.lockedTokens * remainingDuration) /
-                    totalDuration;
-            }
+            totalAdjustedLockedTokens += _getAdjustedLockedTokens(
+                activeUsers[i],
+                currentBlock
+            );
         }
 
         return totalAdjustedLockedTokens;
     }
 
+    /**
+     * @notice Internal function to remove an active user
+     * @param user The address of the user to remove
+     */
     function _removeActiveUser(address user) internal {
         for (uint i = 0; i < usersCounter; i++) {
             if (activeUsers[i] == user) {
@@ -284,18 +320,67 @@ contract Vault is Ownable, ReentrancyGuard {
         );
     }
 
-    function distributeRewards() external nonReentrant onlyAuthorized {
-        uint256 minRewardThreshold = 1e18; // Adjust as needed
+    /// @notice Allows users to extend their lock period and add more tokens to the lock
+    /// @param _additionalAmount The additional amount of tokens to lock
+    function extendLock(uint256 _additionalAmount) external nonReentrant {
+        UserLock storage lock = userLockInfo[msg.sender];
+
+        require(block.number < lock.lockEndBlock, "Lock has already ended");
+        require(lock.lockedTokens > 0, "No active lock found");
+
+        if (_additionalAmount > 0) {
+            require(
+                vaultToken.balanceOf(msg.sender) >= _additionalAmount,
+                "Insufficient ERC20 balance"
+            );
+            require(
+                vaultToken.allowance(msg.sender, address(this)) >=
+                    _additionalAmount,
+                "Insufficient allowance"
+            );
+
+            uint256 feeAmount = (_additionalAmount * DEPOSIT_FEE_PERCENT) / 100;
+            uint256 netAmount = _additionalAmount - feeAmount;
+
+            vaultToken.safeTransferFrom(msg.sender, feeBeneficiary, feeAmount);
+            vaultToken.safeTransferFrom(msg.sender, address(this), netAmount);
+
+            // Increase locked tokens amount
+            lock.lockedTokens += netAmount;
+            totalLockedTokens += netAmount;
+        }
+
+        lock.lockEndBlock += LOCK_PERIOD;
+
+        emit LockExtended(msg.sender, _additionalAmount, lock.lockEndBlock);
+    }
+
+    /// @notice Function to distribute rewards to users
+    /// @param token Address of the token to distribute
+    function distributeRewards(
+        address token
+    ) external nonReentrant onlyAuthorized {
+        RewardToken storage rewardToken = rewardTokens[token];
+        require(
+            rewardToken.availableRewards > 0,
+            "No rewards available to distribute"
+        );
+
         uint256 totalVeTokens = totalSupply();
 
         require(totalVeTokens > 0, "No veTokens to distribute rewards to");
         require(
-            totalAvailableRewards > 0,
+            rewardToken.availableRewards > 0,
             "No rewards available to distribute"
         );
+        require(
+            IERC20(token).balanceOf(address(this)) >=
+                rewardToken.availableRewards,
+            "Insufficient rewards available"
+        );
 
-        uint256 rewardsBalance = totalAvailableRewards;
-        totalAvailableRewards = 0;
+        uint256 rewardsBalance = rewardToken.availableRewards;
+        rewardToken.availableRewards = 0;
 
         // Distribute proportionally
         for (uint256 i = 0; i < usersCounter; i++) {
@@ -303,24 +388,41 @@ contract Vault is Ownable, ReentrancyGuard {
             uint256 balance = balanceOf(user);
             if (balance > 0) {
                 uint256 userShare = (balance * rewardsBalance) / totalVeTokens;
-                if (userShare >= minRewardThreshold) {
-                    vaultToken.safeTransfer(user, userShare);
-                    emit RewardsDistributed(user, userShare);
+                if (userShare >= rewardToken.minRewardThreshold) {
+                    IERC20(token).safeTransfer(user, userShare);
+                    emit RewardsDistributed(user, token, userShare);
                 }
             }
         }
     }
 
-    function fundRewards(uint256 amount) external nonReentrant onlyOwner {
+    /// @notice Function to fund rewards
+    /// @param token Address of the token
+    /// @param amount Amount of tokens to fund
+    function fundRewards(
+        address token,
+        uint256 amount
+    ) external nonReentrant onlyOwner {
         require(
-            vaultToken.allowance(msg.sender, address(this)) >= amount,
+            rewardTokens[token].tokenAddress != address(0),
+            "Token not added as a reward token"
+        );
+        require(
+            IERC20(token).allowance(msg.sender, address(this)) >= amount,
             "Check the token allowance. Approval required."
         );
-        vaultToken.safeTransferFrom(msg.sender, address(this), amount);
-        totalAvailableRewards += amount;
-        emit RewardsFunded(amount);
+
+        // Transfer the funds from the owner to the contract
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        // Update total available rewards for the specified token
+        rewardTokens[token].availableRewards += amount;
+
+        emit RewardsFunded(token, amount);
     }
 
+    /// @notice Emergency unlock function to unlock tokens
+    /// @param user Address of the user
     function emergencyUnlock(address user) external nonReentrant onlyOwner {
         require(
             block.number >
@@ -337,6 +439,7 @@ contract Vault is Ownable, ReentrancyGuard {
         emit EmergencyUnlockTriggered(user, amount);
     }
 
+    /// @notice Claim unlocked tokens
     function claimTokens() external nonReentrant {
         require(
             block.number > userLockInfo[msg.sender].lockEndBlock,
@@ -357,22 +460,32 @@ contract Vault is Ownable, ReentrancyGuard {
     }
 
     /// @notice Withdraw ERC-20 Token to the owner
-    /**
-     * @dev Only Owner can call this function
-     */
-    /// @param _tokenContract ERC-20 Token address
     /// @param _tokenContract ERC-20 Token address
     function withdrawERC20(
         address _tokenContract
     ) external nonReentrant onlyOwner {
         require(
-            address(_tokenContract) != address(vaultToken),
-            "Cannot withdraw the locked ERC20 token"
+            _tokenContract != address(vaultToken),
+            "Cannot withdraw the vaultToken"
         );
 
-        uint256 amount = IERC20(_tokenContract).balanceOf(address(this));
-        IERC20(_tokenContract).safeTransfer(msg.sender, amount);
+        uint256 balance = IERC20(_tokenContract).balanceOf(address(this));
+        uint256 rewardBalance = rewardTokens[_tokenContract].availableRewards;
 
-        emit ERC20Withdrawn(_tokenContract, amount);
+        if (rewardBalance > 0) {
+            // Ensure the requested amount to withdraw is the remaining excess
+            require(balance > rewardBalance, "Cannot withdraw rewards");
+
+            // Withdraw only the excess amount
+            IERC20(_tokenContract).safeTransfer(
+                msg.sender,
+                balance - rewardBalance
+            );
+        } else {
+            // Withdraw the entire balance if it's not a reward token
+            IERC20(_tokenContract).safeTransfer(msg.sender, balance);
+        }
+
+        emit ERC20Withdrawn(_tokenContract, balance);
     }
 }
