@@ -42,6 +42,7 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @notice Stores user token lock details
     struct UserLock {
         uint256 lockedTokens; ///< Amount of tokens locked
+        uint256 virtualLockedTokens; ///< Virtual principal amount
         uint256 lockStartBlock; ///< Start time when tokens were locked
         uint256 lockEndBlock; ///< End time when tokens will be unlocked
     }
@@ -229,7 +230,7 @@ contract Vault is Ownable, ReentrancyGuard {
         } else {
             uint256 elapsed = blockNumber - lock.lockStartBlock;
             uint256 totalDuration = lock.lockEndBlock - lock.lockStartBlock;
-            return (lock.lockedTokens * elapsed) / totalDuration;
+            return (lock.virtualLockedTokens * elapsed) / totalDuration;
         }
     }
 
@@ -308,6 +309,7 @@ contract Vault is Ownable, ReentrancyGuard {
 
         userLockInfo[msg.sender] = UserLock(
             netAmount,
+            netAmount,
             block.number,
             block.number + LOCK_PERIOD
         );
@@ -329,6 +331,11 @@ contract Vault is Ownable, ReentrancyGuard {
         require(lock.lockedTokens > 0, "No active lock found");
 
         if (_additionalAmount > 0) {
+            // If additional amount is greater than 0 it is intended as a new lock, history will be lost.
+            require(
+                _additionalAmount >= MIN_LOCK_AMOUNT,
+                "Amount below minimum requirement"
+            );
             require(
                 vaultToken.balanceOf(msg.sender) >= _additionalAmount,
                 "Insufficient ERC20 balance"
@@ -346,13 +353,29 @@ contract Vault is Ownable, ReentrancyGuard {
             vaultToken.safeTransferFrom(msg.sender, address(this), netAmount);
 
             // Increase locked tokens amount
-            lock.lockedTokens += netAmount;
             totalLockedTokens += netAmount;
+            lock.lockedTokens += netAmount;
+            lock.virtualLockedTokens = lock.lockedTokens;
+            lock.lockStartBlock = block.number;
+            lock.lockEndBlock = block.number + LOCK_PERIOD;
+
+            emit TokensLocked(
+                msg.sender,
+                netAmount,
+                userLockInfo[msg.sender].lockEndBlock
+            );
+        } else {
+            // calculate the new virtual principal
+            uint elapsedTime = block.number - lock.lockStartBlock;
+            uint totalDuration = lock.lockEndBlock - lock.lockStartBlock;
+            uint virtualPrincipal = lock.lockedTokens *
+                (1 + elapsedTime / totalDuration);
+
+            lock.virtualLockedTokens = virtualPrincipal;
+            lock.lockEndBlock = block.number + LOCK_PERIOD;
+
+            emit LockExtended(msg.sender, _additionalAmount, lock.lockEndBlock);
         }
-
-        lock.lockEndBlock += LOCK_PERIOD;
-
-        emit LockExtended(msg.sender, _additionalAmount, lock.lockEndBlock);
     }
 
     /// @notice Function to distribute rewards to users
