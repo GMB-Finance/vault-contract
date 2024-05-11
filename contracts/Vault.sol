@@ -403,8 +403,7 @@ contract Vault is Ownable, ReentrancyGuard {
             // calculate the new virtual principal
             uint elapsedTime = block.number - lock.lockStartBlock;
             uint totalDuration = lock.lockEndBlock - lock.lockStartBlock;
-            uint virtualPrincipal = lock.lockedTokens *
-                (1 + elapsedTime / totalDuration);
+            uint virtualPrincipal = lock.lockedTokens + (lock.lockedTokens * elapsedTime) / totalDuration;
 
             lock.virtualLockedTokens = virtualPrincipal;
             lock.lockEndBlock = block.number + LOCK_PERIOD;
