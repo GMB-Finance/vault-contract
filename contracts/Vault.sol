@@ -26,14 +26,17 @@ contract Vault is Ownable, ReentrancyGuard {
     uint public constant MAX_ACTIVE_USERS = 1_000;
     /// @notice Deposit fee percentage
     uint public constant DEPOSIT_FEE_PERCENT = 1;
-
     /// @dev Maps and state variables
     /// @notice Fee beneficiary
     address public feeBeneficiary;
     /// @notice Number of active users
     uint public usersCounter;
+    /// @notice Number of reward distributions
+    uint public distributionRounds;
     /// @notice Locked tokens
     uint public totalLockedTokens;
+    /// @notice Total users per distribution round
+    uint public totalUsersPerRound;
     /// @notice Active users array
     address[MAX_ACTIVE_USERS] public activeUsers;
     /// @notice Array to store reward token addresses
@@ -50,8 +53,18 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @notice Struct to store reward token details
     struct RewardToken {
         address tokenAddress;
-        uint256 availableRewards;
-        uint256 minRewardThreshold;
+        uint availableRewards;
+        uint minRewardThreshold;
+    }
+
+    /// @notice Struct to store reward token distributions
+    struct RewardDistribution {
+        address rewardToken;
+        uint availableRewards;
+        uint lastUserIndex;
+        uint blockNumber;
+        uint usersCountAtBlock;
+        uint totalSupplyAtBlock;
     }
 
     /// @notice Mapping of user addresses to their respective lock information
@@ -60,20 +73,24 @@ contract Vault is Ownable, ReentrancyGuard {
     mapping(address => bool) public authorized;
     /// @notice Mapping to store reward token details
     mapping(address => RewardToken) public rewardTokens;
+    /// @notice Mapping to store reward token distributions
+    mapping(uint => RewardDistribution) public rewardDistributions;
 
     /// @notice Erc20 token to lock in the Vault
     IERC20 public immutable vaultToken;
 
     ////////////////// EVENTS //////////////////
 
+    /// @notice Event emitted when tokens are sent from an account to another
+    event Transfer(address indexed from, address indexed to, uint256 value);
     /// @notice Event emitted when user deposit fund to our vault
     event TokensLocked(address indexed user, uint amount, uint lockEndBlock);
 
     /// @notice Event emitted when user extends lock period or add amount
     event LockExtended(
         address indexed user,
-        uint256 amountAdded,
-        uint256 newLockEndBlock
+        uint amountAdded,
+        uint newLockEndBlock
     );
 
     /// @notice Event emitted when user claim their locked tokens
@@ -129,7 +146,10 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @notice Sets new beneficiary address
     /// @param _newBeneficiary New beneficiary address
     function setFeeBeneficiary(address _newBeneficiary) external onlyOwner {
-        require(_newBeneficiary != address(0), "Invalid address");
+        require(
+            _newBeneficiary != address(0) && _newBeneficiary != feeBeneficiary,
+            "Invalid address"
+        );
         feeBeneficiary = _newBeneficiary;
     }
 
@@ -137,7 +157,21 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @param _user Address of the user
     function setAuthorizedUser(address _user, bool _state) external onlyOwner {
         require(_user != address(0), "Invalid address");
+        require(authorized[_user] != _state, "Invalid state");
         authorized[_user] = _state;
+    }
+
+    /// @notice Set the total number of users per distribution round
+    /// @param _totalUsersPerRound Total number of users per distribution round
+    function setTotalUsersPerRound(
+        uint _totalUsersPerRound
+    ) external onlyOwner {
+        require(
+            _totalUsersPerRound > 0 &&
+                _totalUsersPerRound != totalUsersPerRound,
+            "Invalid number of users"
+        );
+        totalUsersPerRound = _totalUsersPerRound;
     }
 
     /// @notice Function to add a reward token
@@ -145,7 +179,7 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @param _minRewardThreshold Distribution rate of the reward token
     function setRewardToken(
         address _tokenAddress,
-        uint256 _minRewardThreshold
+        uint _minRewardThreshold
     ) external onlyOwner {
         require(_tokenAddress != address(0), "Invalid token address");
         require(
@@ -178,7 +212,7 @@ contract Vault is Ownable, ReentrancyGuard {
     /**
      * @notice Get adjusted total Supply
      */
-    function totalSupply() public view virtual returns (uint256) {
+    function totalSupply() public view virtual returns (uint) {
         return _getTotalAdjustedLockedTokens();
     }
 
@@ -187,7 +221,7 @@ contract Vault is Ownable, ReentrancyGuard {
      * @param user The address of the user
      * @return The adjusted amount of locked tokens
      */
-    function balanceOf(address user) public view returns (uint256) {
+    function balanceOf(address user) public view returns (uint) {
         return _getAdjustedLockedTokens(user, block.number);
     }
 
@@ -199,8 +233,8 @@ contract Vault is Ownable, ReentrancyGuard {
      */
     function balanceOfAt(
         address user,
-        uint256 blockNumber
-    ) public view returns (uint256) {
+        uint blockNumber
+    ) public view returns (uint) {
         require(
             blockNumber <= block.number,
             "Query block number is in the future"
@@ -241,9 +275,9 @@ contract Vault is Ownable, ReentrancyGuard {
     function _getTotalAdjustedLockedTokens()
         internal
         view
-        returns (uint256 totalAdjustedLockedTokens)
+        returns (uint totalAdjustedLockedTokens)
     {
-        uint256 currentBlock = block.number;
+        uint currentBlock = block.number;
         totalAdjustedLockedTokens = 0;
 
         for (uint i = 0; i < usersCounter; i++) {
@@ -280,7 +314,7 @@ contract Vault is Ownable, ReentrancyGuard {
      *      We mint represent token to users so that we can calculate each users weighted deposit amount.
      */
     /// @param _amount Token Amount to deposit
-    function lockTokens(uint256 _amount) external nonReentrant {
+    function lockTokens(uint _amount) external nonReentrant {
         require(_amount >= MIN_LOCK_AMOUNT, "Amount below minimum requirement");
         require(usersCounter < MAX_ACTIVE_USERS, "Max users limit reached");
         require(
@@ -296,8 +330,8 @@ contract Vault is Ownable, ReentrancyGuard {
             "Insufficient allowance"
         );
 
-        uint256 feeAmount = (_amount * DEPOSIT_FEE_PERCENT) / 100; // Calculate the fee
-        uint256 netAmount = _amount - feeAmount; // Calculate net amount after fee deduction
+        uint feeAmount = (_amount * DEPOSIT_FEE_PERCENT) / 100; // Calculate the fee
+        uint netAmount = _amount - feeAmount; // Calculate net amount after fee deduction
 
         // Transfer the fee and the net amount
         vaultToken.safeTransferFrom(msg.sender, feeBeneficiary, feeAmount);
@@ -315,6 +349,7 @@ contract Vault is Ownable, ReentrancyGuard {
         );
         totalLockedTokens += netAmount;
 
+        emit Transfer(address(0), msg.sender, 0);
         emit TokensLocked(
             msg.sender,
             netAmount,
@@ -384,39 +419,93 @@ contract Vault is Ownable, ReentrancyGuard {
         address token
     ) external nonReentrant onlyAuthorized {
         RewardToken storage rewardToken = rewardTokens[token];
-        require(
-            rewardToken.availableRewards > 0,
-            "No rewards available to distribute"
-        );
+        uint256 rewardsBalance = rewardToken.availableRewards;
+        require(rewardsBalance > 0, "No rewards available to distribute");
 
         uint256 totalVeTokens = totalSupply();
 
         require(totalVeTokens > 0, "No veTokens to distribute rewards to");
         require(
-            rewardToken.availableRewards > 0,
-            "No rewards available to distribute"
-        );
-        require(
-            IERC20(token).balanceOf(address(this)) >=
-                rewardToken.availableRewards,
+            IERC20(token).balanceOf(address(this)) >= rewardsBalance,
             "Insufficient rewards available"
         );
 
-        uint256 rewardsBalance = rewardToken.availableRewards;
         rewardToken.availableRewards = 0;
 
+        uint loopLimit = totalUsersPerRound > 0 && totalUsersPerRound < usersCounter
+            ? totalUsersPerRound
+            : usersCounter;
+
         // Distribute proportionally
-        for (uint256 i = 0; i < usersCounter; i++) {
+        for (uint i = 0; i < loopLimit; i++) {
             address user = activeUsers[i];
-            uint256 balance = balanceOf(user);
+            uint balance = balanceOf(user);
             if (balance > 0) {
-                uint256 userShare = (balance * rewardsBalance) / totalVeTokens;
+                uint userShare = (balance * rewardsBalance) / totalVeTokens;
                 if (userShare >= rewardToken.minRewardThreshold) {
                     IERC20(token).safeTransfer(user, userShare);
                     emit RewardsDistributed(user, token, userShare);
                 }
             }
         }
+
+        rewardDistributions[distributionRounds] = RewardDistribution({
+            rewardToken: rewardToken.tokenAddress,
+            availableRewards: rewardsBalance,
+            lastUserIndex: loopLimit,
+            blockNumber: block.number,
+            usersCountAtBlock: usersCounter,
+            totalSupplyAtBlock: totalVeTokens
+        });
+
+        distributionRounds++;
+    }
+
+    /// @notice Function to continue reward distribution
+    /// @param distributionRound Index of the round to complete
+    function continueDistributingRewards(
+        uint distributionRound
+    ) external nonReentrant onlyOwner {
+        RewardDistribution storage distributionInfo = rewardDistributions[
+            distributionRound
+        ];
+        RewardToken memory rewardToken = rewardTokens[
+            distributionInfo.rewardToken
+        ];
+
+        require(
+            distributionInfo.lastUserIndex < distributionInfo.usersCountAtBlock,
+            "Tokens for this round have already been distributed!"
+        );
+
+        uint loopLimit = totalUsersPerRound > 0 && totalUsersPerRound < distributionInfo.usersCountAtBlock - distributionInfo.lastUserIndex
+            ? totalUsersPerRound
+            : distributionInfo.usersCountAtBlock -
+                distributionInfo.lastUserIndex;
+
+        // Distribute proportionally
+        for (uint i = distributionInfo.lastUserIndex; i < loopLimit; i++) {
+            address user = activeUsers[i];
+            uint balance = balanceOfAt(user, distributionInfo.blockNumber);
+            if (balance > 0) {
+                uint userShare = (balance * distributionInfo.availableRewards) /
+                    distributionInfo.totalSupplyAtBlock;
+                if (userShare >= rewardToken.minRewardThreshold) {
+                    IERC20(rewardToken.tokenAddress).safeTransfer(
+                        user,
+                        userShare
+                    );
+                    emit RewardsDistributed(
+                        user,
+                        rewardToken.tokenAddress,
+                        userShare
+                    );
+                }
+            }
+        }
+
+        // update just what was changed
+        distributionInfo.lastUserIndex = loopLimit;
     }
 
     /// @notice Function to fund rewards
@@ -424,7 +513,7 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @param amount Amount of tokens to fund
     function fundRewards(
         address token,
-        uint256 amount
+        uint amount
     ) external nonReentrant onlyOwner {
         require(
             rewardTokens[token].tokenAddress != address(0),
@@ -453,7 +542,7 @@ contract Vault is Ownable, ReentrancyGuard {
             "Emergency unlock time restriction not met"
         );
 
-        uint256 amount = userLockInfo[user].lockedTokens;
+        uint amount = userLockInfo[user].lockedTokens;
         delete userLockInfo[user];
         totalLockedTokens -= amount;
         _removeActiveUser(user);
@@ -473,7 +562,7 @@ contract Vault is Ownable, ReentrancyGuard {
             "No locked tokens to claim"
         );
 
-        uint256 amount = userLockInfo[msg.sender].lockedTokens;
+        uint amount = userLockInfo[msg.sender].lockedTokens;
         delete userLockInfo[msg.sender];
         totalLockedTokens -= amount;
         _removeActiveUser(msg.sender);
@@ -492,8 +581,8 @@ contract Vault is Ownable, ReentrancyGuard {
             "Cannot withdraw the vaultToken"
         );
 
-        uint256 balance = IERC20(_tokenContract).balanceOf(address(this));
-        uint256 rewardBalance = rewardTokens[_tokenContract].availableRewards;
+        uint balance = IERC20(_tokenContract).balanceOf(address(this));
+        uint rewardBalance = rewardTokens[_tokenContract].availableRewards;
 
         if (rewardBalance > 0) {
             // Ensure the requested amount to withdraw is the remaining excess
