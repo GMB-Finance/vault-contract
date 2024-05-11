@@ -15,13 +15,13 @@ contract Vault is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @dev Constants core parameters$
-    /// @notice Assumption: 1 block every 12 seconds
-    uint public constant BLOCKS_PER_DAY = 7_200;
+    /// @notice Assumption: 1 block every 2 seconds adjusted to Base
+    uint public constant BLOCKS_PER_DAY = 43_200;
     /// @notice Lock period of 1 year worth of blocks
     //uint public constant LOCK_PERIOD = BLOCKS_PER_DAY * 365; //uncomment for mainnet
-    uint public constant LOCK_PERIOD = 50; //for testing
+    uint public constant LOCK_PERIOD = 600; //for testing on base
     /// @notice Minimum tokens required for locking
-    uint public constant MIN_LOCK_AMOUNT = 10_000 * 10 ** 18;
+    uint public constant MIN_LOCK_AMOUNT = 1_000 * 10 ** 18;
     /// @notice Max number of users who can lock tokens
     uint public constant MAX_ACTIVE_USERS = 1_000;
     /// @notice Deposit fee percentage
