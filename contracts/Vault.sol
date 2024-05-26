@@ -203,7 +203,7 @@ contract Vault is Ownable, ReentrancyGuard {
     ////////////////// READ //////////////////
 
     function name() external view virtual returns (string memory) {
-        return "veGMB";
+        return "veGMBee";
     }
 
     function decimals() external view virtual returns (uint8) {
