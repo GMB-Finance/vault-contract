@@ -17,9 +17,8 @@ contract Vault is Ownable, ReentrancyGuard {
     /// @dev Constants core parameters$
     /// @notice Assumption: 1 block every 2 seconds adjusted to Base
     uint public constant BLOCKS_PER_DAY = 43_200;
-    /// @notice Lock period of 1 year worth of blocks
-    //uint public constant LOCK_PERIOD = BLOCKS_PER_DAY * 365; //uncomment for mainnet
-    uint public constant LOCK_PERIOD = 600; //for testing on base
+    /// @notice Lock period of 3 months worth of blocks
+    uint public constant LOCK_PERIOD = 3,888,000; // for 3 months
     /// @notice Minimum tokens required for locking
     uint public constant MIN_LOCK_AMOUNT = 1_000 * 10 ** 18;
     /// @notice Max number of users who can lock tokens
