@@ -3,7 +3,13 @@ pragma solidity 0.8.20;
 
 /**
  * @title  Vault
- * @author Rekt/KurgerBing69/FrankFourier
+ * @author Rekt/xciteddelirium/FrankFourier
+     ____ ____________ ____ 
+     / ____||  \\/  ||  _ \
+    | |  __ | \\  / || |_) |\
+    | | |_ || |\\/| ||  _ < \
+    | |__| || |  | || |_) | |
+     \\_____||_|  |_||____/
  */
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
